@@ -1,0 +1,17 @@
+---
+- hosts: master
+  tasks:
+    #copy Manifests files  to admin host
+    - name: Creating directory
+      file:
+       path: /var/tmp/wordpress
+       state: directory
+       mode: '0755'
+    - name: Copying files to master node.
+      copy:
+        src: ./WordpressApplication.yml
+        dest: /var/tmp/wordpress/
+      
+      #Deploy application in K8S cluster
+    - name: Creating multi_tier application setup with yaml files.
+      command: "kubectl apply -f /var/tmp/wordpress/"

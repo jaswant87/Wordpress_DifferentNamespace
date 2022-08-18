@@ -1,0 +1,248 @@
+---
+#Setup mysql database and required objects 
+#namespace for mysql database
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: databases
+---
+#Setup credential as secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysecure
+  namespace: databases
+data:
+  rootpass: cmVkaGF0
+  userpass: cmVkaGF0
+---
+#mysql service used for database connection.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: databases
+  labels:
+    app:  wordpress
+spec:
+  ports:
+    - port: 3306
+  selector:
+    tier: mysql
+---
+#persistent volume to store data.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mysql-pv
+  labels:
+     app: wordpress
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/data"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pv-claim
+  namespace: databases
+  labels:
+    app: wordpress
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+#mysql database setup
+apiVersion: apps/v1 # for versions before 1.9.0 use apps/v1beta2
+kind: Deployment
+metadata:
+  name:  mysql
+  namespace: databases
+  labels:
+    tier: mysql 
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      tier: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        tier: mysql
+    spec:
+      containers:
+      - image: mysql:5.7
+        name: mysql
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysecure
+              key: rootpass
+        - name: MYSQL_USER
+          value: vd
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysecure
+              key: userpass
+        - name: MYSQL_DATABASE
+          value: sqldb
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mysql-persistent-storage
+        persistentVolumeClaim:
+          claimName: mysql-pv-claim
+---
+#Setup wordpress application objects
+#namespace for wordpress application
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: web
+---
+#credential for databse access.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysecure
+  namespace: web
+data:
+  rootpass: cmVkaGF0
+  userpass: cmVkaGF0
+---
+#Service will allow external access for application
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress
+  namespace: web
+  labels:
+    app: wordpress
+spec:
+  ports:
+    - port: 80
+  selector:
+    app: wordpress
+  type: LoadBalancer
+---
+#Application setup
+apiVersion: apps/v1 # for versions before 1.9.0 use apps/v1beta2
+kind: Deployment
+metadata:
+  name: wordpress
+  namespace: web
+  labels:
+    app: wordpress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app:  wordpress
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: wordpress
+    spec:
+      containers:
+      - image: wordpress:latest
+        name: wordpress
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: mysql.databases
+        - name: WORDPRESS_DB_USER
+          value: vd
+        - name: WORDPRESS_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysecure
+              key: userpass
+        - name: WORDPRESS_DB_NAME
+          value: sqldb
+        ports:
+        - containerPort: 80
+          name: wordpress
+
+---
+#Condition 2. Setup for RBAC
+#Required access for both groups.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: web
+  name: webdevrole
+rules:
+- apiGroups: [""]
+  resources: ["pods","services"]
+  verbs: ["get", "list", "watch", "create"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: webdevbinding
+  namespace: web
+subjects:
+- kind: Group
+  name: webdev
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: webdevrole
+  apiGroup: rbac.authorization.k8s.io
+---
+#Access to webadmins group to both namespace
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: webadminsrole
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: webadmins1
+  namespace: databases
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: webadminsrole
+subjects:
+- kind: Group
+  name: webadmins
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: webadmins2
+  namespace: web
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: webadminsrole
+subjects:
+- kind: Group
+  name: webadmins
+  apiGroup: rbac.authorization.k8s.io
